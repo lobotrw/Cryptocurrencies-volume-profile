@@ -39,3 +39,10 @@ The Crypto Volume Profile App is a streamlined web application designed for anal
 
 The Crypto Volume Profile App is developed for informational purposes only. It is not financial advice and should not be considered as such. For more information, please visit the developer's profiles and contact points:
 
+
+## Method notes (logic fixes)
+
+- **Volume is spread over each bar's Low–High range.** Before, all of a bar's volume went into the bin of its close, which left empty "gaps" (16 of 99 bins on BTC 1y/1d) where price actually traded.
+- **Hindsight removed from the chart.** In *Current levels* mode, levels come from all bars up to the latest one and are drawn only from the latest bar forward, not over the past they were computed from. *Walk-forward check* builds the profile on the first N% of the period (shaded) and draws its levels only over the later, unseen part.
+- **Volume units:** USD as Yahoo reports it, or coin units (USD volume ÷ close). Coin units stop the growth of USD volume over the years from over-weighting recent prices.
+- The legend shows the threshold you chose (it used to always say "94th"). The interval list follows Yahoo's limits for each period. Stablecoins, wrapped/staked tokens and symbols with no Yahoo data were removed from `symbols.txt`. Figures render at 150 dpi instead of 1000.

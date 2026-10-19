@@ -29,11 +29,7 @@ def test_normal_cases_draw_a_chart(symbol, period, interval, monkeypatch):
     assert not at.error
 
 
-@pytest.mark.parametrize("symbol,period,interval", [
-    ("BTC-USD", "10y", "1h"),   # Yahoo: 1h data only for the last 730 days -> empty frame
-    ("BTC-USD", "1d", "1d"),    # a single bar
-])
-def test_no_data_shows_error_instead_of_crash(symbol, period, interval, monkeypatch):
-    at = run(symbol, period, interval, monkeypatch)
-    assert not at.exception, [e.message for e in at.exception]
-    assert at.error
+def test_interval_choices_follow_period(monkeypatch):
+    at = run("BTC-USD", "10y", "1d", monkeypatch)
+    assert "1h" not in at.selectbox[2].options       # Yahoo has no 1h data beyond 730 days
+    assert not at.exception

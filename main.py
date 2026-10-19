@@ -5,6 +5,8 @@ import yfinance as yf
 import matplotlib.colors as mcolors
 import streamlit as st
 
+import vprofile as vp
+
 # Set Page Configurations
 st.set_page_config(
     page_title="Crypto Volume Profile",
@@ -43,13 +45,24 @@ with col2:
      
     period = st.selectbox(
         "Select Period:",
-        ('1y','1d','5d','1mo','3mo','6mo','1y','2y','5y','10y'))
-    
+        vp.PERIODS)
+
     interval = st.selectbox(
         "Select Interval:",
-        ('1d','1h','1d','5d','1wk','1mo','3mo'))
+        vp.VALID_INTERVALS[period],
+        help="Only intervals Yahoo serves for this period (1h: last 730 days only).")
 
-    threshold = st.number_input("Volume Threshold %:", 1, 100, 94)
+    pct_threshold = st.number_input("Volume Threshold %:", 1, 100, 94)
+
+    volume_unit = st.radio("Volume units:", ["USD (as reported by Yahoo)", "Coin units (USD volume ÷ close)"],
+                           help="Yahoo crypto volume is USD-denominated and has grown a lot over the years, "
+                                "so on long periods USD volume over-weights recent prices.")
+
+    mode = st.radio("Levels:", ["Current levels (all data)", "Walk-forward check"],
+                    help="Current levels use all bars up to the latest one and are drawn only from the latest bar "
+                         "forward. Walk-forward builds the profile on the first part of the period and draws its "
+                         "levels only over the later, unseen part.")
+    formation_pct = st.slider("Formation share %", 30, 90, 70, step=5) if mode == "Walk-forward check" else 100
 
 progress_text = "Data Loading in progress. Please wait..."
 my_bar        = col1.progress(0, text=progress_text)
@@ -67,58 +80,64 @@ if data.empty or data['Close'].dropna().nunique() < 2:
              "Yahoo limits intraday history (1h: last 730 days), and some symbols are delisted.")
     st.stop()
 
-data['Close'] = data['Close'].ffill()
+for c in ("Close", "High", "Low"):
+    data[c] = data[c].ffill()
 data['Volume'] = data['Volume'].fillna(0)
+vol_series = data['Volume'] if volume_unit.startswith("USD") else data['Volume'] / data['Close']
 
-price_bins = np.linspace(data['Close'].min(), data['Close'].max(), 100).astype(float)
-
-volume_profile, _ = np.histogram(
-    data['Close'], 
-    bins=99, 
-    range=(float(data['Close'].min()), float(data['Close'].max())), 
-    weights=data['Volume']
-)
-
-# Calculate bin centers for plotting
-bin_centers    = ((price_bins[:-1] + price_bins[1:]) / 2).astype(float)
+n_form = max(2, int(len(data) * formation_pct / 100))
+formation = data.iloc[:n_form]
+edges, bin_centers, volume_profile = vp.volume_profile(formation, 99, vol_series.iloc[:n_form])
+vol_cutoff, levels = vp.high_volume_levels(bin_centers, volume_profile, pct_threshold)
 
 # Create the plot
-fig, (ax2, ax) = plt.subplots(1, 2, figsize=(20, 10), gridspec_kw={'width_ratios': [1, 4]}, dpi=1000)
+fig, (ax2, ax) = plt.subplots(1, 2, figsize=(20, 10), gridspec_kw={'width_ratios': [1, 4]}, dpi=150)
 
 # Plot Currency chart
 ax.plot(data.index, data['Close'], color='black', alpha=0.5)
 
-# Draw horizontal lines where volume profile is bigger than threshold
-threshold     = np.percentile(volume_profile, threshold)  # Set threshold to percentile
 current_close = float(data['Close'].iloc[-1])  # Get the most recent closing price
+x_last = data.index[-1]
+x_span = data.index[-1] - data.index[0]
 
-for price, volume in zip(bin_centers, volume_profile):
-    if volume > threshold:
-        if current_close > float(price):
-            color = 'aqua'
-            linestyle = "-"
-        else:
-            color = 'red'
-            linestyle = "--"
-        ax.axhline(y=float(price), color=color, linestyle=linestyle, alpha=0.5, linewidth=4)
+if mode == "Walk-forward check":
+    x_from, x_to = formation.index[-1], x_last
+    ax.axvspan(data.index[0], x_from, color='gray', alpha=0.12, label='formation period (profile built here)')
+else:
+    # levels are only known at the latest bar: draw them from there forward, never over the past
+    x_from, x_to = x_last, x_last + x_span * 0.08
+    ax.set_xlim(data.index[0], x_to)
 
+for price in levels:
+    above = current_close > price
+    ax.hlines(y=price, xmin=x_from, xmax=x_to, color='aqua' if above else 'red',
+              linestyle='-' if above else '--', alpha=0.6, linewidth=4)
 
 # Plot volume profile
 cmap = mcolors.LinearSegmentedColormap.from_list("", ["aqua", "red"], gamma=0.7)
 
-ax2.barh(bin_centers, volume_profile, height=price_bins[1]-price_bins[0], color=cmap(volume_profile/volume_profile.max()))
+ax2.barh(bin_centers, volume_profile, height=edges[1]-edges[0], color=cmap(volume_profile/volume_profile.max()))
 ax2.set_ylim(ax.get_ylim())
-ax2.axvline(x=threshold, color='gray', linestyle='--', linewidth=2, label=f'{94}th Percentile')
+ax2.axvline(x=vol_cutoff, color='gray', linestyle='--', linewidth=2, label=f'{vp.ordinal(pct_threshold)} percentile')
 
 # Set labels and title
 ax.set_xlabel('Date')
 ax.set_ylabel('Price (USD)')
-ax2.set_ylabel('Volume')
+ax2.set_ylabel('Price (USD)')
+ax2.set_xlabel('Volume (USD)' if volume_unit.startswith("USD") else 'Volume (coin units)')
 ax2.legend()
+if mode == "Walk-forward check":
+    ax.legend(loc='upper left')
 
-plt.title(f'{option} Volume Profile')
+profile_span = f"{formation.index[0]:%Y-%m-%d} – {formation.index[-1]:%Y-%m-%d}"
+plt.title(f'{option} Volume Profile ({"walk-forward: " if mode != "Current levels (all data)" else ""}profile {profile_span})')
 
 col1.pyplot(fig)
+col1.caption(
+    f"Profile built from {len(formation)} bars ({profile_span}); each bar's volume is spread over its "
+    f"Low–High range. {len(levels)} levels above the {vp.ordinal(pct_threshold)} percentile: "
+    + ", ".join(f"{p:,.6g}" for p in levels))
+plt.close(fig)
 
 
 col2.info('''A streamlined web application for analyzing cryptocurrency volume profiles.
