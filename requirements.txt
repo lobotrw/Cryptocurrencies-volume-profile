@@ -3,4 +3,4 @@ numpy
 matplotlib
 pandas
 yahooquery
-yfinance
+yfinance>=0.2.54

@@ -19,11 +19,15 @@ with open('symbols.txt', 'r') as file:
     symbols = [symbol.strip().strip("'") for symbol in content.split(',')]
 
 
+@st.cache_data(ttl=600, show_spinner=False)
 def get_data(option, period, interval):
     df = yf.download(
                 tickers  = option,
                 period   = period,
-                interval = interval
+                interval = interval,
+                auto_adjust = True,
+                multi_level_index = False,   # flat columns: 'Close', 'Volume' (yfinance >= 0.2.48)
+                progress = False
                 )
     return df
 
@@ -50,17 +54,20 @@ with col2:
 progress_text = "Data Loading in progress. Please wait..."
 my_bar        = col1.progress(0, text=progress_text)
 
-for percent_complete in range(100):
-    df = get_data(option, period, interval)
-    
-    my_bar.progress(percent_complete + 1, text=progress_text)
+df = get_data(option, period, interval)   # was downloaded 100 times inside the progress loop
+my_bar.progress(100, text=progress_text)
 
 my_bar.empty()
 st.toast(f'Loaded {option}!', icon="✅")
 
 data       = pd.DataFrame(df)
 
-data['Close'] = data['Close'].fillna(method='ffill')
+if data.empty or data['Close'].dropna().nunique() < 2:
+    st.error(f"No usable data for {option} with period={period} and interval={interval}. "
+             "Yahoo limits intraday history (1h: last 730 days), and some symbols are delisted.")
+    st.stop()
+
+data['Close'] = data['Close'].ffill()
 data['Volume'] = data['Volume'].fillna(0)
 
 price_bins = np.linspace(data['Close'].min(), data['Close'].max(), 100).astype(float)
